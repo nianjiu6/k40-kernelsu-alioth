@@ -133,40 +133,19 @@ jobs:
         run: bash scripts/config.sh
 
       - name: Install build dependencies
-        timeout-minutes: 8
+        timeout-minutes: 2
         run: |
           set -euo pipefail
-          # GH ubuntu-24.04 apt hangs on azure.archive.ubuntu.com
-          # (runner-images #14594 / #14823). Drop that mirror, IPv4-only,
-          # Retries=0 so failover is seconds not tens of minutes.
-          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
-          printf '%s\n' 'Acquire::Retries "0";' 'Acquire::http::Timeout "10";' 'Acquire::https::Timeout "10";' | sudo tee /etc/apt/apt.conf.d/80retries
-          if [ -f /etc/apt/apt-mirrors.txt ]; then
-            sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
-            echo "apt-mirrors.txt after drop:"
-            cat /etc/apt/apt-mirrors.txt || true
-          fi
-          pkgs="bc bison flex libelf-dev libssl-dev device-tree-compiler lz4 libncurses-dev"
-          need=""
-          for p in $pkgs; do
-            dpkg -s "$p" >/dev/null 2>&1 || need="$need $p"
-          done
-          if [ -n "$need" ]; then
-            echo "apt need:$need"
-            sudo apt-get update -qq
-            if ! sudo timeout 90 apt-get install -y --no-install-recommends --download-only $need; then
-              echo "download-only timed out; retry without azure mirror"
-              if [ -f /etc/apt/apt-mirrors.txt ]; then
-                sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
-              fi
-              sudo apt-get update -qq
-              sudo apt-get install -y --no-install-recommends --download-only $need
-            fi
-            sudo apt-get install -y --no-install-recommends $need
-          else
-            echo "apt: all kernel packages already present"
-          fi
+          # This runner cannot resolve archive.ubuntu.com (apt DNS dead).
+          # ubuntu-24.04 already ships bison/flex/bc/libssl-dev/lz4/make.
+          # The only missing debs were libelf-dev + device-tree-compiler;
+          # neither is required (arm64 4.19, NEED_DTBO=false).
           mkdir -p "$WORKSPACE"
+          for bin in bc bison flex make python3 lz4; do
+            command -v "$bin"
+            "$bin" --version | head -n1 || true
+          done
+          dpkg -s libssl-dev >/dev/null
 
       - name: Free up disk space
         if: env.REMOVE_UNUSED_PACKAGES == 'true'
