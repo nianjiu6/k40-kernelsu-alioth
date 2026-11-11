@@ -133,12 +133,19 @@ jobs:
         run: bash scripts/config.sh
 
       - name: Install build dependencies
+        timeout-minutes: 8
         run: |
           set -euo pipefail
-          # apt BEFORE free-disk-space: that action has left runners with
-          # broken ubuntu mirror DNS (Temporary failure resolving).
+          # GH ubuntu-24.04 apt hangs on azure.archive.ubuntu.com
+          # (runner-images #14594 / #14823). Drop that mirror, IPv4-only,
+          # Retries=0 so failover is seconds not tens of minutes.
           echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
-          printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "20";' 'Acquire::https::Timeout "20";' | sudo tee /etc/apt/apt.conf.d/80retries
+          printf '%s\n' 'Acquire::Retries "0";' 'Acquire::http::Timeout "10";' 'Acquire::https::Timeout "10";' | sudo tee /etc/apt/apt.conf.d/80retries
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+            echo "apt-mirrors.txt after drop:"
+            cat /etc/apt/apt-mirrors.txt || true
+          fi
           pkgs="bc bison flex libelf-dev libssl-dev device-tree-compiler lz4 libncurses-dev"
           need=""
           for p in $pkgs; do
@@ -146,16 +153,16 @@ jobs:
           done
           if [ -n "$need" ]; then
             echo "apt need:$need"
-            ok=0
-            for i in 1 2 3 4 5; do
-              if sudo timeout 90 apt-get update -qq && sudo timeout 180 apt-get install -y --no-install-recommends $need; then
-                ok=1
-                break
+            sudo apt-get update -qq
+            if ! sudo timeout 90 apt-get install -y --no-install-recommends --download-only $need; then
+              echo "download-only timed out; retry without azure mirror"
+              if [ -f /etc/apt/apt-mirrors.txt ]; then
+                sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
               fi
-              echo "apt attempt $i failed, retrying..."
-              sleep $((i * 10))
-            done
-            [ "$ok" = 1 ]
+              sudo apt-get update -qq
+              sudo apt-get install -y --no-install-recommends --download-only $need
+            fi
+            sudo apt-get install -y --no-install-recommends $need
           else
             echo "apt: all kernel packages already present"
           fi
