@@ -98,7 +98,9 @@ permissions:
 jobs:
   build:
     name: Build ${{ inputs.config }}
-    runs-on: ubuntu-latest
+    # Pin 24.04: ubuntu-latest flipped to 26.04 (resolute) and apt DNS
+    # against azure.archive.ubuntu.com failed this runner (exit 100).
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     outputs:
       device: ${{ steps.meta.outputs.device }}
@@ -154,15 +156,19 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update -qq
-          # Kept deliberately lean. The historical list here was copied from the
-          # full AOSP platform build docs and pulled in ~40 packages a kernel
-          # build never touches, several of which no longer exist on current
-          # Ubuntu (python2, lib32ncurses5-dev, ...).
-          sudo apt-get install -y --no-install-recommends \
-            bc bison build-essential ccache cpio curl device-tree-compiler flex \
-            git libelf-dev libssl-dev lz4 make python3 rsync unzip zip zstd \
-            libncurses-dev
+          set -euo pipefail
+          # Kept deliberately lean. Retry: GH runners occasionally lose apt DNS.
+          pkgs="bc bison build-essential ccache cpio curl device-tree-compiler flex git libelf-dev libssl-dev lz4 make python3 rsync unzip zip zstd libncurses-dev"
+          ok=0
+          for i in 1 2 3 4 5; do
+            if sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends $pkgs; then
+              ok=1
+              break
+            fi
+            echo "apt attempt $i failed, retrying..."
+            sleep $((i * 15))
+          done
+          [ "$ok" = 1 ]
           mkdir -p "$WORKSPACE"
 
       - name: Set up toolchain
