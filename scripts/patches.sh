@@ -300,6 +300,16 @@ hide_stuff_apply() {
 	endgroup
 }
 
+# Alioth OLED: lineage-20 defaults IDLE_TIMEOUT_MS=100 / encoder_mask=1.
+# After the first DRM blank the panel never restores 51h; keep idle PC off.
+alioth_panel_idle_apply() {
+	group "Alioth panel idle disable"
+	python3 "${REPO_ROOT}/patches/alioth_panel_idle.py" "$KERNEL_DIR" \
+		|| die "failed to patch alioth panel idle defaults"
+	ok "SDE idle timeout/mask defaulted to 0"
+	endgroup
+}
+
 # Official 3.x kprobes builds must not compile vendor 0.9.5 CONFIG_KSU call
 # sites (exec/open/read_write/stat/input/devpts). Those symbols are gone and
 # ksu_handle_execveat_sucompat changed prototype.
@@ -400,6 +410,8 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 			   [ "${KSU_HOOK_MODE_RESOLVED:-}" = "kprobes" ]; then
 				neutralize_vendor_ksu_hooks
 			fi
+
+			alioth_panel_idle_apply
 
 			if is_true "${ENABLE_SUSFS:-false}";      then susfs_apply;      fi
 			if is_true "${ENABLE_HIDE_STUFF:-false}"; then hide_stuff_apply; fi
