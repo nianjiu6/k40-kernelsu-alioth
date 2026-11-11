@@ -132,6 +132,35 @@ jobs:
       - name: Resolve configuration
         run: bash scripts/config.sh
 
+      - name: Install build dependencies
+        run: |
+          set -euo pipefail
+          # apt BEFORE free-disk-space: that action has left runners with
+          # broken ubuntu mirror DNS (Temporary failure resolving).
+          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+          printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "20";' 'Acquire::https::Timeout "20";' | sudo tee /etc/apt/apt.conf.d/80retries
+          pkgs="bc bison flex libelf-dev libssl-dev device-tree-compiler lz4 libncurses-dev"
+          need=""
+          for p in $pkgs; do
+            dpkg -s "$p" >/dev/null 2>&1 || need="$need $p"
+          done
+          if [ -n "$need" ]; then
+            echo "apt need:$need"
+            ok=0
+            for i in 1 2 3 4 5; do
+              if sudo timeout 90 apt-get update -qq && sudo timeout 180 apt-get install -y --no-install-recommends $need; then
+                ok=1
+                break
+              fi
+              echo "apt attempt $i failed, retrying..."
+              sleep $((i * 10))
+            done
+            [ "$ok" = 1 ]
+          else
+            echo "apt: all kernel packages already present"
+          fi
+          mkdir -p "$WORKSPACE"
+
       - name: Free up disk space
         if: env.REMOVE_UNUSED_PACKAGES == 'true'
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
@@ -153,23 +182,6 @@ jobs:
           sudo mkswap /mnt/swapfile
           sudo swapon /mnt/swapfile
           free -h
-
-      - name: Install build dependencies
-        run: |
-          set -euo pipefail
-          # Kept deliberately lean. Retry: GH runners occasionally lose apt DNS.
-          pkgs="bc bison build-essential ccache cpio curl device-tree-compiler flex git libelf-dev libssl-dev lz4 make python3 rsync unzip zip zstd libncurses-dev"
-          ok=0
-          for i in 1 2 3 4 5; do
-            if sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends $pkgs; then
-              ok=1
-              break
-            fi
-            echo "apt attempt $i failed, retrying..."
-            sleep $((i * 15))
-          done
-          [ "$ok" = 1 ]
-          mkdir -p "$WORKSPACE"
 
       - name: Set up toolchain
         run: bash scripts/toolchain.sh
