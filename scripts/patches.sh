@@ -306,7 +306,7 @@ alioth_panel_idle_apply() {
 	group "Alioth panel idle disable"
 	python3 "${REPO_ROOT}/patches/alioth_panel_idle.py" "$KERNEL_DIR" \
 		|| die "failed to patch alioth panel idle defaults"
-	ok "SDE idle timeout/mask defaulted to 0"
+	ok "SDE idle timeout defaulted to 0"
 	endgroup
 }
 
