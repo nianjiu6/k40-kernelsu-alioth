@@ -206,6 +206,8 @@ build_kernel() {
 	if is_true "${ENABLE_XIAOMI_MIUI:-false}"; then
 		./scripts/config --file "${OUT}/.config" \
 			--set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
+			--set-str LOCALVERSION -perf \
+			-d LOCALVERSION_AUTO \
 			-e XIAOMI_MIUI \
 			-e SF_BINDER \
 			-e MIHW \
