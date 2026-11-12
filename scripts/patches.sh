@@ -300,13 +300,13 @@ hide_stuff_apply() {
 	endgroup
 }
 
-# Alioth OLED: lineage-20 defaults IDLE_TIMEOUT_MS=100 / encoder_mask=1.
-# After the first DRM blank the panel never restores 51h; keep idle PC off.
+# Alioth HyperOS OLED: select msm-miui, skip LHBM DSI reads, idle timeout 0.
+# Do not clear IDLE_ENCODER_MASK_DEFAULT (mask=0 => HAL power-collapses OLED).
 alioth_panel_idle_apply() {
-	group "Alioth panel idle disable"
+	group "Alioth HyperOS msm-miui display"
 	python3 "${REPO_ROOT}/patches/alioth_panel_idle.py" "$KERNEL_DIR" \
-		|| die "failed to patch alioth panel idle defaults"
-	ok "SDE idle timeout defaulted to 0"
+		|| die "failed to enable msm-miui / patch alioth panel"
+	ok "msm-miui selected; SDE idle timeout defaulted to 0"
 	endgroup
 }
 
