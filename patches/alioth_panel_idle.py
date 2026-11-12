@@ -120,6 +120,90 @@ def skip_lhbm_read(src: Path) -> None:
     print(f"warn: mi_dsi_panel_read_lhbm_white_param not found in {src}", file=sys.stderr)
 
 
+def patch_miui_drm_symbols(kdir: Path) -> bool:
+    """msm-miui links against Xiaomi drm_sysfs globals that AOSP drm_sysfs.c
+    does not provide. Provide connector_kdev + identity PCC so vmlinux links.
+    """
+    ok = True
+    sysfs = kdir / "drivers/gpu/drm/drm_sysfs.c"
+    if not sysfs.is_file():
+        print(f"warn: {sysfs} missing", file=sys.stderr)
+        return False
+    text = sysfs.read_text(encoding="utf-8", errors="replace")
+    if "struct device *connector_kdev" not in text:
+        if "struct class *drm_class;" not in text:
+            print("warn: drm_class anchor missing in drm_sysfs.c", file=sys.stderr)
+            ok = False
+        else:
+            text = text.replace(
+                "struct class *drm_class;",
+                "struct class *drm_class;\nstruct device *connector_kdev;",
+                1,
+            )
+            print("defined connector_kdev in drm_sysfs.c")
+    if "connector_kdev = connector->kdev" not in text:
+        err_anchor = (
+            "\tif (IS_ERR(connector->kdev)) {\n"
+            "\t\tDRM_ERROR(\"failed to register connector device: %ld\\n\", PTR_ERR(connector->kdev));"
+        )
+        err_new = (
+            "\tif (!connector_kdev)\n"
+            "\t\tconnector_kdev = connector->kdev;\n"
+            "\n"
+            + err_anchor
+        )
+        if err_anchor not in text:
+            print("warn: drm_sysfs_connector_add IS_ERR anchor not found", file=sys.stderr)
+            ok = False
+        else:
+            text = text.replace(err_anchor, err_new, 1)
+            print("patched drm_sysfs_connector_add to set connector_kdev")
+    sysfs.write_text(text, encoding="utf-8")
+
+    pcc_def = (
+        "struct drm_msm_pcc color_transform_pcc_cfg = {\n"
+        "\t.r.c = 0, .r.r = 32768, .r.g = 0, .r.b = 0,\n"
+        "\t.g.c = 0, .g.r = 0, .g.g = 32768, .g.b = 0,\n"
+        "\t.b.c = 0, .b.r = 0, .b.g = 0, .b.b = 32768,\n"
+        "};"
+    )
+    pcc = kdir / "techpack/display/msm-miui/sde/sde_color_processing.c"
+    if pcc.is_file():
+        ptext = pcc.read_text(encoding="utf-8", errors="replace")
+        if "extern struct drm_msm_pcc color_transform_pcc_cfg;" in ptext:
+            ptext = ptext.replace(
+                "extern struct drm_msm_pcc color_transform_pcc_cfg;",
+                pcc_def,
+                1,
+            )
+            pcc.write_text(ptext, encoding="utf-8")
+            print("defined color_transform_pcc_cfg identity PCC in sde_color_processing.c")
+        elif "color_transform_pcc_cfg =" in ptext:
+            print("color_transform_pcc_cfg already defined")
+        else:
+            print("warn: color_transform_pcc_cfg extern not found", file=sys.stderr)
+            ok = False
+    else:
+        print(f"warn: {pcc} missing", file=sys.stderr)
+        ok = False
+
+    atomic = kdir / "techpack/display/msm-miui/msm_atomic.c"
+    if atomic.is_file():
+        atext = atomic.read_text(encoding="utf-8", errors="replace")
+        old_notify = (
+            "sysfs_notify(&connector_kdev->kobj, NULL, \"complete_commit_time\");"
+        )
+        new_notify = (
+            "if (connector_kdev)\n"
+            "\t\tsysfs_notify(&connector_kdev->kobj, NULL, \"complete_commit_time\");"
+        )
+        if old_notify in atext and "if (connector_kdev)" not in atext:
+            atext = atext.replace(old_notify, new_notify, 1)
+            atomic.write_text(atext, encoding="utf-8")
+            print("null-checked connector_kdev in complete_time_generate_event")
+    return ok
+
+
 def enable_miui_display(kdir: Path) -> bool:
     miui_dir = kdir / "techpack/display/msm-miui"
     if not miui_dir.is_dir():
@@ -153,11 +237,9 @@ def main() -> int:
         print("usage: alioth_panel_idle.py KERNEL_DIR", file=sys.stderr)
         return 2
     kdir = Path(sys.argv[1])
-    ok = True
 
     miui = enable_miui_display(kdir)
-    if not miui:
-        ok = False
+    drm_ok = patch_miui_drm_symbols(kdir) if miui else False
 
     display_roots = [
         kdir / "techpack/display/msm",
@@ -170,10 +252,10 @@ def main() -> int:
         skip_lhbm_read(root / "dsi/dsi_panel_mi.c")
         skip_lhbm_read(root / "dsi/mi_dsi_panel.c")
     if not idle_hit:
-        ok = False
+        print("warn: IDLE_TIMEOUT_MS_DEFAULT not patched in any msm_drv.c", file=sys.stderr)
 
-    # msm-miui is mandatory for HyperOS OLED. Idle/LHBM patches are best-effort.
-    return 0 if miui else 1
+    # msm-miui + drm_sysfs Xiaomi globals are required to link.
+    return 0 if miui and drm_ok else 1
 
 
 if __name__ == "__main__":
