@@ -85,7 +85,7 @@
 
 | 选项 | 作用 |
 | --- | --- |
-| `ENABLE_HIDE_STUFF` | 额外清除内核中的 KernelSU 痕迹 |
+| `ENABLE_XIAOMI_MIUI` | HyperOS/MIUI：打开 `CONFIG_XIAOMI_MIUI`，编 `drm_sysfs_mi` + `msm-miui`。AOSP 变体投屏有画面但物理 OLED 黑屏 |
 | `ENABLE_KPM` | SukiSU-Ultra 的 Kernel Patch Module 支持，编译后对 Image 执行 `patch_linux`。仅 `sukisu-ultra` + `arm64` |
 | `KSU_HOOK_MODE` | hook 方式：`auto`（5.10+ 用 kprobes，更旧的用 manual）/ `kprobes` / `manual` / `tracepoint` / `syscall` / `none` |
 

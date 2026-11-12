@@ -120,10 +120,52 @@ def skip_lhbm_read(src: Path) -> None:
     print(f"warn: mi_dsi_panel_read_lhbm_white_param not found in {src}", file=sys.stderr)
 
 
-def patch_miui_drm_symbols(kdir: Path) -> bool:
-    """msm-miui links against Xiaomi drm_sysfs globals that AOSP drm_sysfs.c
-    does not provide. Provide connector_kdev + identity PCC so vmlinux links.
+def ensure_xiaomi_miui_kconfig(kdir: Path) -> None:
+    """Make CONFIG_XIAOMI_MIUI a real Kconfig bool so olddefconfig keeps it.
+
+    drivers/gpu/drm/Makefile already switches drm_sysfs.o -> drm_sysfs_mi.o
+    and drm_ioctl.o -> drm_ioctl_mi.o on this symbol. Exporting it only in
+    techpack/display/config/konadisp.conf does not reach that Makefile.
     """
+    for p in (
+        kdir / "drivers/gpu/drm/Kconfig",
+        kdir / "arch/arm64/Kconfig",
+        kdir / "init/Kconfig",
+    ):
+        if p.is_file() and "config XIAOMI_MIUI" in p.read_text(
+            encoding="utf-8", errors="replace"
+        ):
+            print(f"CONFIG_XIAOMI_MIUI already declared in {p}")
+            return
+    drm = kdir / "drivers/gpu/drm/Kconfig"
+    if not drm.is_file():
+        print("warn: drivers/gpu/drm/Kconfig missing; cannot declare XIAOMI_MIUI", file=sys.stderr)
+        return
+    drm.write_text(
+        drm.read_text(encoding="utf-8", errors="replace")
+        + "\nconfig XIAOMI_MIUI\n"
+        + '\tbool "Xiaomi MIUI kernel features"\n'
+        + "\tdefault n\n"
+        + "\thelp\n"
+        + "\t  Build drm_sysfs_mi / drm_ioctl_mi and select techpack msm-miui.\n"
+        + "\t  Required for HyperOS/MIUI vendor displayfeature sysfs.\n",
+        encoding="utf-8",
+    )
+    print("declared config XIAOMI_MIUI in drivers/gpu/drm/Kconfig")
+
+
+def patch_miui_drm_symbols(kdir: Path) -> bool:
+    """Only stub AOSP drm_sysfs.c when drm_sysfs_mi.c is not selected.
+
+    With CONFIG_XIAOMI_MIUI=y the tree compiles drm_sysfs_mi.c which already
+    defines connector_kdev, identity PCC, and disp_param/doze_brightness.
+    Stubbing sde_color_processing.c in that case duplicates the PCC symbol.
+    """
+    mi_sysfs = kdir / "drivers/gpu/drm/drm_sysfs_mi.c"
+    if mi_sysfs.is_file():
+        print("drm_sysfs_mi.c present; skip AOSP drm_sysfs stubs (need CONFIG_XIAOMI_MIUI=y)")
+        return True
+
     ok = True
     sysfs = kdir / "drivers/gpu/drm/drm_sysfs.c"
     if not sysfs.is_file():
@@ -238,6 +280,7 @@ def main() -> int:
         return 2
     kdir = Path(sys.argv[1])
 
+    ensure_xiaomi_miui_kconfig(kdir)
     miui = enable_miui_display(kdir)
     drm_ok = patch_miui_drm_symbols(kdir) if miui else False
 

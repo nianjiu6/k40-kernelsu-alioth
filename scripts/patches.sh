@@ -306,7 +306,7 @@ alioth_panel_idle_apply() {
 	group "Alioth HyperOS msm-miui display"
 	python3 "${REPO_ROOT}/patches/alioth_panel_idle.py" "$KERNEL_DIR" \
 		|| die "failed to enable msm-miui / patch alioth panel"
-	ok "msm-miui selected; SDE idle timeout defaulted to 0"
+	ok "msm-miui + CONFIG_XIAOMI_MIUI Kconfig; SDE idle timeout defaulted to 0"
 	endgroup
 }
 

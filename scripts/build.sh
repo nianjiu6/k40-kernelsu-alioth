@@ -198,6 +198,32 @@ build_kernel() {
 	make -j"$jobs" CC=clang $args "${KERNEL_CONFIG}" \
 		|| die "defconfig generation failed"
 
+	# HyperOS/MIUI: CONFIG_XIAOMI_MIUI must be a *kernel* Kconfig symbol so
+	# drivers/gpu/drm/Makefile links drm_sysfs_mi.o + drm_ioctl_mi.o.
+	# Exporting it only from techpack konadisp.conf still builds msm-miui
+	# but leaves AOSP drm_sysfs.c, so card0-DSI-1 has no disp_param and
+	# the physical OLED stays black while scrcpy still works.
+	if is_true "${ENABLE_XIAOMI_MIUI:-false}"; then
+		./scripts/config --file "${OUT}/.config" \
+			--set-str STATIC_USERMODEHELPER_PATH /system/bin/micd \
+			-e XIAOMI_MIUI \
+			-e SF_BINDER \
+			-e MIHW \
+			-e PERF_CRITICAL_RT_TASK \
+			-e OVERLAY_FS \
+			-e KPROBES \
+			-e HAVE_KPROBES \
+			-e KPROBE_EVENTS \
+			-e DEBUG_FS \
+			|| die "scripts/config failed to enable XIAOMI_MIUI"
+		if ! grep -q '^CONFIG_XIAOMI_MIUI=y' "${OUT}/.config"; then
+			die "CONFIG_XIAOMI_MIUI=y did not stick in out/.config (declare the Kconfig bool)"
+		fi
+		export CONFIG_XIAOMI_MIUI=y
+		ok "CONFIG_XIAOMI_MIUI=y (drm_sysfs_mi / msm-miui)"
+		summary "| Display | MIUI (\`CONFIG_XIAOMI_MIUI=y\`) |"
+	fi
+
 	info "make -j${jobs} ${args}"
 	# shellcheck disable=SC2086
 	make -j"$jobs" CC="$cc" $args \

@@ -71,6 +71,7 @@ declare -A DEFAULTS=(
 	[DISABLE_LTO]="false"
 	[DISABLE_CC_WERROR]="false"
 	[EXTRA_DEFCONFIG]=""
+	[ENABLE_XIAOMI_MIUI]="false"
 
 	# UTS / uname camouflage for matching a live device
 	[FORCE_SUBLEVEL]=""
