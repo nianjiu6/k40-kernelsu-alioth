@@ -780,6 +780,8 @@ PATCH_MEMORY_INCLUDES_NEW = """#include "asm-generic/fixmap.h"
 #include <linux/version.h>
 #include <linux/mm.h>
 #include <linux/string.h>
+#include <asm/memory.h>
+#include <asm/sections.h>
 """
 
 PHYS_FROM_VIRT_OLD = """    *err = 0;
@@ -789,8 +791,10 @@ PHYS_FROM_VIRT_OLD = """    *err = 0;
 PHYS_FROM_VIRT_NEW = """    *err = 0;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 13, 0)
-    if (virt_addr_valid((void *)addr))
-        return virt_to_phys((void *)addr);
+    /* arm64 KASLR puts .rodata (sys_call_table) in the kimage map.
+     * virt_to_phys() uses the linear map and pokes the wrong page. */
+    if (addr >= (unsigned long)_text && addr < (unsigned long)_end)
+        return __pa_symbol(addr);
 #endif
 
     pgd = pgd_offset(mm, addr);
@@ -849,6 +853,11 @@ DISPATCHER_NEW = """    {
             hooked_count++;
         }
         mutex_unlock(&hooked_entries_lock);
+        if (READ_ONCE(ksu_syscall_table[ni_slot]) != (syscall_fn_t)ksu_syscall_dispatcher) {
+            pr_err("dispatcher patch did not stick at slot %d (got 0x%lx)\\n", ni_slot,
+                   (unsigned long)READ_ONCE(ksu_syscall_table[ni_slot]));
+            return;
+        }
         ksu_dispatcher_nr = ni_slot;
         pr_info("dispatcher installed at slot %d\\n", ksu_dispatcher_nr);
     }
@@ -882,6 +891,32 @@ SYS_ENTER_NEW = """#ifdef CONFIG_HAVE_SYSCALL_TRACEPOINTS
         pr_info("hook_manager: sys_enter tracepoint registered\\n");
     }
 #endif
+    ksu_kprobe_fallback_init();
+"""
+
+HOOK_MGR_INCLUDE_OLD = '#include "hook/syscall_event_bridge.h"\n'
+HOOK_MGR_INCLUDE_NEW = '#include "hook/syscall_event_bridge.h"\n#include "hook/kprobe_fallback.h"\n'
+
+HOOK_MGR_EXIT_OLD = """    ksu_sucompat_exit();
+    ksu_setuid_hook_exit();
+}
+"""
+HOOK_MGR_EXIT_NEW = """    ksu_kprobe_fallback_exit();
+    ksu_sucompat_exit();
+    ksu_setuid_hook_exit();
+}
+"""
+
+BOOT_EVENT_OLD = """    ksu_selinux_hide_handle_post_fs_data();
+    // retry forced features which failed at second stage
+    ksu_feature_apply_forced();
+}
+"""
+BOOT_EVENT_NEW = """    ksu_selinux_hide_handle_post_fs_data();
+    // retry forced features which failed at second stage
+    ksu_feature_apply_forced();
+    track_throne(false);
+}
 """
 
 
@@ -939,11 +974,11 @@ def main() -> int:
             patch_mem,
             [
                 (PATCH_MEMORY_INCLUDES_OLD, PATCH_MEMORY_INCLUDES_NEW, "patch_memory includes"),
-                (PHYS_FROM_VIRT_OLD, PHYS_FROM_VIRT_NEW, "phys_from_virt linear map"),
+                (PHYS_FROM_VIRT_OLD, PHYS_FROM_VIRT_NEW, "phys_from_virt kimage"),
                 (PMD_LEAF_OLD, PMD_LEAF_NEW, "pmd_sect"),
                 (COPY_NOFAULT_OLD, COPY_NOFAULT_NEW, "fixmap memcpy"),
             ],
-            "virt_addr_valid((void *)addr)",
+            "__pa_symbol(addr)",
             "arm64 patch_memory.c",
         )
     syscall_hook = kernel_dir / "hook" / "arm64" / "syscall_hook.c"
@@ -951,17 +986,51 @@ def main() -> int:
         apply_replacements(
             syscall_hook,
             [(DISPATCHER_OLD, DISPATCHER_NEW, "dispatcher install")],
-            "dispatcher patch failed at slot",
+            "dispatcher patch did not stick",
             "arm64 syscall_hook.c",
         )
     hook_mgr = kernel_dir / "hook" / "syscall_hook_manager.c"
     if hook_mgr.is_file():
         apply_replacements(
             hook_mgr,
-            [(SYS_ENTER_OLD, SYS_ENTER_NEW, "sys_enter guard")],
-            "no dispatcher slot, skip sys_enter",
+            [
+                (HOOK_MGR_INCLUDE_OLD, HOOK_MGR_INCLUDE_NEW, "kprobe_fallback include"),
+                (SYS_ENTER_OLD, SYS_ENTER_NEW, "sys_enter guard"),
+                (HOOK_MGR_EXIT_OLD, HOOK_MGR_EXIT_NEW, "kprobe_fallback exit"),
+            ],
+            "ksu_kprobe_fallback_init",
             "syscall_hook_manager.c",
         )
+    boot_event = kernel_dir / "runtime" / "boot_event.c"
+    if boot_event.is_file():
+        apply_replacements(
+            boot_event,
+            [(BOOT_EVENT_OLD, BOOT_EVENT_NEW, "post_fs_data track_throne")],
+            "track_throne(false);",
+            "boot_event.c",
+        )
+    here = Path(__file__).resolve().parent
+    fallback_c = here / "kprobe_fallback.c"
+    fallback_h = here / "kprobe_fallback.h"
+    if fallback_c.is_file() and fallback_h.is_file():
+        dest_c = kernel_dir / "hook" / "kprobe_fallback.c"
+        dest_h = kernel_dir / "hook" / "kprobe_fallback.h"
+        dest_c.write_text(fallback_c.read_text(encoding="utf-8").replace("\r\n", "\n"), encoding="utf-8", newline="\n")
+        dest_h.write_text(fallback_h.read_text(encoding="utf-8").replace("\r\n", "\n"), encoding="utf-8", newline="\n")
+        print(f"installed 4.19 kprobe_fallback: {dest_c}")
+        kbuild = kernel_dir / "Kbuild"
+        if kbuild.is_file():
+            kb = kbuild.read_text(encoding="utf-8").replace("\r\n", "\n")
+            if "hook/kprobe_fallback.o" not in kb:
+                needle = "kernelsu-objs += hook/syscall_hook_manager.o\n"
+                if needle not in kb:
+                    sys.exit("4.19 compat: missing Kbuild marker for kprobe_fallback")
+                kbuild.write_text(
+                    kb.replace(needle, needle + "kernelsu-objs += hook/kprobe_fallback.o\n", 1),
+                    encoding="utf-8",
+                    newline="\n",
+                )
+                print(f"patched 4.19 Kbuild: {kbuild}")
     return 0
 
 
