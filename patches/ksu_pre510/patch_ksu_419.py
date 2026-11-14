@@ -919,6 +919,44 @@ BOOT_EVENT_NEW = """    ksu_selinux_hide_handle_post_fs_data();
 }
 """
 
+SUPERCALL_C_OLD = """int ksu_install_fd(void)
+{
+    return ksu_install_fd_with_permissions(O_CLOEXEC, 0);
+}
+
+int ksu_install_su_fd(void)
+"""
+
+SUPERCALL_C_NEW = """int ksu_install_fd(void)
+{
+    return ksu_install_fd_with_permissions(O_CLOEXEC, 0);
+}
+
+int ksu_try_install_fd(void __user *outp)
+{
+    int fd = ksu_install_fd();
+
+    if (fd < 0)
+        return fd;
+    if (outp && copy_to_user(outp, &fd, sizeof(fd))) {
+        ksu_close_fd(fd);
+        return -EFAULT;
+    }
+    return 0;
+}
+
+int ksu_install_su_fd(void)
+"""
+
+SUPERCALL_H_OLD = """// Install KSU fd to current process
+int ksu_install_fd(void);
+"""
+
+SUPERCALL_H_NEW = """// Install KSU fd to current process
+int ksu_install_fd(void);
+int ksu_try_install_fd(void __user *outp);
+"""
+
 
 def apply_replacements(path: Path, replacements, already_marker: str, label: str, replace_all: bool = False) -> None:
     text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
@@ -1008,6 +1046,22 @@ def main() -> int:
             [(BOOT_EVENT_OLD, BOOT_EVENT_NEW, "post_fs_data track_throne")],
             "track_throne(false);",
             "boot_event.c",
+        )
+    supercall_c = kernel_dir / "supercall" / "supercall.c"
+    if supercall_c.is_file():
+        apply_replacements(
+            supercall_c,
+            [(SUPERCALL_C_OLD, SUPERCALL_C_NEW, "ksu_try_install_fd")],
+            "ksu_try_install_fd",
+            "supercall.c",
+        )
+    supercall_h = kernel_dir / "supercall" / "supercall.h"
+    if supercall_h.is_file():
+        apply_replacements(
+            supercall_h,
+            [(SUPERCALL_H_OLD, SUPERCALL_H_NEW, "ksu_try_install_fd proto")],
+            "ksu_try_install_fd(void __user *outp)",
+            "supercall.h",
         )
     here = Path(__file__).resolve().parent
     fallback_c = here / "kprobe_fallback.c"

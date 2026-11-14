@@ -230,6 +230,24 @@ build_kernel() {
 		summary "| Display | MIUI (\`CONFIG_XIAOMI_MIUI=y\`) |"
 	fi
 
+	# Vendor alioth_defconfig has `# CONFIG_KPROBES is not set`. make
+	# *_defconfig can also drop CONFIG_KSU if the symbol is unknown at that
+	# moment. Force both on the generated .config and abort if they vanish —
+	# otherwise Manager's reboot-magic is SIGSYS'd and grant_root fails.
+	if [ "${KSU_VARIANT:-none}" != "none" ]; then
+		./scripts/config --file "${OUT}/.config" \
+			-e KSU -e KPROBES -e HAVE_KPROBES -e KPROBE_EVENTS \
+			-e KRETPROBES -e DEBUG_FS -e FTRACE -e TRACE_EVENTS \
+			-e FTRACE_SYSCALLS -d LOCALVERSION_AUTO \
+			|| die "scripts/config failed to enable KSU/KPROBES"
+		grep -q '^CONFIG_KSU=y' "${OUT}/.config" \
+			|| die "CONFIG_KSU=y did not stick in out/.config"
+		grep -q '^CONFIG_KPROBES=y' "${OUT}/.config" \
+			|| die "CONFIG_KPROBES=y did not stick in out/.config"
+		ok "CONFIG_KSU=y CONFIG_KPROBES=y (4.19 grant_root)"
+		summary "| KSU kprobes | CONFIG_KSU=y CONFIG_KPROBES=y |"
+	fi
+
 	# Stock ROM /proc/version compiler clause. ZyC clang 16 would otherwise
 	# leak "clang version 16.0.6" / LLD into linux_proc_banner
 	# (Chunqiu detectKernelBuild / Miscellaneous Check(9)).
@@ -261,6 +279,13 @@ check_output() {
 
 	ok "kernel image: ${KERNEL_IMAGE_NAME} ($(du -h "$image" | cut -f1))"
 	export_env CHECK_FILE_IS_OK true
+
+	if [ "${KSU_VARIANT:-none}" != "none" ]; then
+		local cfg="${OUT}/.config"
+		grep -q '^CONFIG_KSU=y' "$cfg" || die "built .config missing CONFIG_KSU=y"
+		grep -q '^CONFIG_KPROBES=y' "$cfg" || die "built .config missing CONFIG_KPROBES=y"
+		ok "built .config still has CONFIG_KSU=y CONFIG_KPROBES=y"
+	fi
 
 	if is_true "${NEED_DTBO:-false}"; then
 		[ -f "${boot}/dtbo.img" ] || die "NEED_DTBO=true but ${boot}/dtbo.img was not produced"

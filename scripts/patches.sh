@@ -321,6 +321,21 @@ neutralize_vendor_ksu_hooks() {
 	endgroup
 }
 
+# 4.19 has no seccomp action_cache. Manager's libksud child is SIGSYS'd on
+# reboot(DEADBEEF, CAFEBABE) and never gets a driver fd. Patch seccomp/reboot/
+# setresuid in the Xiaomi tree so grant_root does not need kprobes.
+grant_root_419_apply() {
+	local kver
+	kver=$(kernel_version "$KERNEL_DIR") || return 0
+	ver_ge "$kver" "5.10" && return 0
+	group "4.19 grant_root (seccomp reboot + setresuid)"
+	python3 "${REPO_ROOT}/patches/ksu_pre510/patch_grant_root_419.py" "$KERNEL_DIR" \
+		|| die "failed to patch 4.19 grant_root path"
+	ok "seccomp allows KSU reboot-magic; reboot/setresuid hooked without kprobes"
+	summary "| grant_root 4.19 | seccomp+reboot+setresuid source hooks |"
+	endgroup
+}
+
 # Manual/syscall hook patches for pre-GKI trees, used when the fork expects the
 # hooks to already exist in the kernel source rather than hooking via kprobes.
 hooks_patch_apply() {
@@ -409,6 +424,10 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
 			if [ "${KSU_VARIANT:-none}" = "kernelsu" ] &&
 			   [ "${KSU_HOOK_MODE_RESOLVED:-}" = "kprobes" ]; then
 				neutralize_vendor_ksu_hooks
+			fi
+
+			if [ "${KSU_VARIANT:-none}" != "none" ]; then
+				grant_root_419_apply
 			fi
 
 			alioth_panel_idle_apply

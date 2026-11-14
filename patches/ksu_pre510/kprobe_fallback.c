@@ -32,7 +32,6 @@ static int seccomp_reboot_pre(struct kprobe *p, struct pt_regs *regs)
     int nr;
 
     (void)p;
-    (void)regs;
     if (current->seccomp.mode != SECCOMP_MODE_FILTER)
         return 0;
     real = task_pt_regs(current);
@@ -45,34 +44,18 @@ static int seccomp_reboot_pre(struct kprobe *p, struct pt_regs *regs)
         return 0;
     if ((unsigned int)PT_REGS_PARM2(real) != KSU_INSTALL_MAGIC2)
         return 0;
-    current->seccomp.mode = SECCOMP_MODE_DISABLED;
-    return 0;
-}
-
-static void seccomp_reboot_post(struct kprobe *p, struct pt_regs *regs, unsigned long flags)
-{
-    struct pt_regs *real;
-    int nr;
-
-    (void)p;
-    (void)regs;
-    (void)flags;
-    real = task_pt_regs(current);
-    if (!real)
-        return;
-    nr = syscall_get_nr(current, real);
-    if (nr != __NR_reboot)
-        return;
-    if ((unsigned int)PT_REGS_SYSCALL_PARM1(real) != KSU_INSTALL_MAGIC1)
-        return;
-    if (current->seccomp.mode == SECCOMP_MODE_DISABLED)
-        current->seccomp.mode = SECCOMP_MODE_FILTER;
+    /*
+     * Skip __secure_computing and return 0 (allow). Setting
+     * seccomp.mode = DISABLED makes 4.19 hit default: BUG().
+     */
+    regs->regs[0] = 0;
+    regs->pc = regs->regs[30];
+    return 1;
 }
 
 static struct kprobe seccomp_kp = {
     .symbol_name = "__secure_computing",
     .pre_handler = seccomp_reboot_pre,
-    .post_handler = seccomp_reboot_post,
 };
 
 static int execve_pre(struct kprobe *p, struct pt_regs *regs)
