@@ -80,6 +80,7 @@ declare -A DEFAULTS=(
 	[KBUILD_BUILD_HOST]="runnervmmprz5"
 	[KBUILD_BUILD_VERSION]="1"
 	[SPOOF_LOCALVERSION]=""
+	[SPOOF_LINUX_COMPILER]=""
 
 	# Packaging
 	[USE_CUSTOM_ANYKERNEL3]="false"

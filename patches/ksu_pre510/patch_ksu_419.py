@@ -179,7 +179,84 @@ void ksu_free_selinux_policy_view(struct selinux_policy *pol);
 struct selinux_policy *ksu_dup_sepolicy(struct selinux_policy *old_pol);
 """
 
+ALIOTH_RULES_FN_OLD = """void apply_kernelsu_rules()
+{
+    struct selinux_policy *pol, *old_pol;
+    struct policydb *db;
+"""
+
+ALIOTH_RULES_FN_NEW = """static void ksu_apply_alioth_compat_rules(struct policydb *db)
+{
+    static const char *const apps[] = {
+        "untrusted_app", "untrusted_app_25", "untrusted_app_27",
+        "untrusted_app_30", "untrusted_app_32",
+    };
+    static const char *const file_perms[] = {
+        "execute", "execute_no_trans", "entrypoint",
+        "getattr", "open", "read", "map",
+    };
+    static const char *const exec_tgts[] = {
+        "shell_exec", "apk_data_file", "untrusted_app_lib_file", "app_data_file",
+    };
+    unsigned int i, j, k;
+
+    pr_info("ksu: alioth HyperOS manager/enabler sepolicy\\n");
+    for (i = 0; i < (unsigned int)(sizeof(apps) / sizeof(apps[0])); i++) {
+        ksu_allow(db, apps[i], apps[i], "process2", "nosuid_transition");
+        ksu_allow(db, apps[i], apps[i], "process", "transition");
+        for (j = 0; j < (unsigned int)(sizeof(exec_tgts) / sizeof(exec_tgts[0])); j++) {
+            for (k = 0; k < (unsigned int)(sizeof(file_perms) / sizeof(file_perms[0])); k++)
+                ksu_allow(db, apps[i], exec_tgts[j], "file", file_perms[k]);
+        }
+        ksu_dontaudit(db, apps[i], KERNEL_SU_DOMAIN, ALL, ALL);
+        ksu_dontaudit(db, apps[i], KERNEL_SU_FILE, ALL, ALL);
+    }
+    ksu_dontaudit(db, "priv_app", KERNEL_SU_DOMAIN, ALL, ALL);
+    ksu_dontaudit(db, "priv_app", KERNEL_SU_FILE, ALL, ALL);
+    ksu_dontaudit(db, "isolated_app", KERNEL_SU_DOMAIN, ALL, ALL);
+    ksu_dontaudit(db, "isolated_app", KERNEL_SU_FILE, ALL, ALL);
+
+    ksu_allow(db, "vendor_feature_enabler_client", "mnt_vendor_file", "dir", "search");
+    ksu_allow(db, "vendor_feature_enabler_client", "mnt_vendor_file", "dir", "read");
+    ksu_allow(db, "vendor_feature_enabler_client", "mnt_vendor_file", "dir", "open");
+    ksu_allow(db, "vendor_feature_enabler_client", "mnt_vendor_file", "dir", "getattr");
+    ksu_allow(db, "vendor_feature_enabler_client", "mnt_vendor_file", "dir", "watch");
+    ksu_allow(db, "vendor_feature_enabler_client", "mnt_vendor_file", "dir", "watch_reads");
+    ksu_allow(db, "vendor_feature_enabler_client", "mnt_vendor_file", "file", "read");
+    ksu_allow(db, "vendor_feature_enabler_client", "mnt_vendor_file", "file", "open");
+    ksu_allow(db, "vendor_feature_enabler_client", "mnt_vendor_file", "file", "getattr");
+    ksu_allow(db, "vendor_feature_enabler_client", "mnt_vendor_file", "lnk_file", "read");
+    ksu_allow(db, "vendor_feature_enabler_client", "mnt_vendor_file", "lnk_file", "getattr");
+    ksu_allow(db, "vendor_feature_enabler_client", "vendor_persist_data_file", "dir", "search");
+    ksu_allow(db, "vendor_feature_enabler_client", "vendor_persist_data_file", "dir", "read");
+    ksu_allow(db, "vendor_feature_enabler_client", "vendor_persist_data_file", "dir", "open");
+    ksu_allow(db, "vendor_feature_enabler_client", "vendor_persist_data_file", "dir", "getattr");
+    ksu_allow(db, "vendor_feature_enabler_client", "vendor_persist_data_file", "file", "read");
+    ksu_allow(db, "vendor_feature_enabler_client", "vendor_persist_data_file", "file", "open");
+    ksu_allow(db, "vendor_feature_enabler_client", "vendor_persist_data_file", "file", "getattr");
+}
+
+void apply_kernelsu_rules()
+{
+    struct selinux_policy *pol, *old_pol;
+    struct policydb *db;
+"""
+
+ALIOTH_RULES_CALL_OLD = """    ksu_allow(db, "system_server", KERNEL_SU_DOMAIN, "process", "sigkill");
+
+    rcu_assign_pointer(selinux_state.policy, pol);
+"""
+
+ALIOTH_RULES_CALL_NEW = """    ksu_allow(db, "system_server", KERNEL_SU_DOMAIN, "process", "sigkill");
+
+    ksu_apply_alioth_compat_rules(db);
+
+    rcu_assign_pointer(selinux_state.policy, pol);
+"""
+
 RULES_REPLACEMENTS = [
+    (ALIOTH_RULES_FN_OLD, ALIOTH_RULES_FN_NEW, "alioth manager/enabler sepolicy helper"),
+    (ALIOTH_RULES_CALL_OLD, ALIOTH_RULES_CALL_NEW, "alioth sepolicy call"),
     (
         "    mutex_lock(&selinux_state.policy_mutex);\n\n    old_pol = rcu_dereference_protected(selinux_state.policy, lockdep_is_held(&selinux_state.policy_mutex));\n    backup_sepolicy = ksu_dup_sepolicy(old_pol);",
         "    mutex_lock(&ksu_selinux_policy_mutex);\n\n    old_pol = ksu_snapshot_selinux_policy();\n    if (IS_ERR(old_pol)) {\n        pr_err(\"snapshot sepolicy: %ld\\n\", PTR_ERR(old_pol));\n        mutex_unlock(&ksu_selinux_policy_mutex);\n        return;\n    }\n    backup_sepolicy = ksu_dup_sepolicy(old_pol);",

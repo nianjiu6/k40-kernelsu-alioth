@@ -163,6 +163,10 @@ build_kernel() {
 		export_env LOCALVERSION "$SPOOF_LOCALVERSION"
 		info "LOCALVERSION=${LOCALVERSION}"
 	fi
+	if [ -n "${SPOOF_LINUX_COMPILER:-}" ]; then
+		export SPOOF_LINUX_COMPILER
+		info "SPOOF_LINUX_COMPILER=${SPOOF_LINUX_COMPILER}"
+	fi
 
 	# DISABLE_LTO is this action's boolean configuration switch, but several
 	# Android kernel trees use the same Make variable for compiler flags (for
@@ -224,6 +228,16 @@ build_kernel() {
 		export CONFIG_XIAOMI_MIUI=y
 		ok "CONFIG_XIAOMI_MIUI=y (drm_sysfs_mi / msm-miui)"
 		summary "| Display | MIUI (\`CONFIG_XIAOMI_MIUI=y\`) |"
+	fi
+
+	# Stock ROM /proc/version compiler clause. ZyC clang 16 would otherwise
+	# leak "clang version 16.0.6" / LLD into linux_proc_banner
+	# (Chunqiu detectKernelBuild / Miscellaneous Check(9)).
+	if [ -n "${SPOOF_LINUX_COMPILER:-}" ] && [ -f scripts/mkcompile_h ]; then
+		if ! grep -q 'SPOOF_LINUX_COMPILER' scripts/mkcompile_h; then
+			printf '\n# Override LINUX_COMPILER with the stock ROM banner.\nif [ -n "${SPOOF_LINUX_COMPILER:-}" ]; then\n\tLINUX_COMPILER="${SPOOF_LINUX_COMPILER}"\nfi\n' >> scripts/mkcompile_h
+		fi
+		ok "linux_proc_banner compiler spoofed"
 	fi
 
 	info "make -j${jobs} ${args}"
