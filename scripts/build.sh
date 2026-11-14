@@ -244,6 +244,9 @@ build_kernel() {
 			|| die "CONFIG_KSU=y did not stick in out/.config"
 		grep -q '^CONFIG_KPROBES=y' "${OUT}/.config" \
 			|| die "CONFIG_KPROBES=y did not stick in out/.config"
+		# shellcheck disable=SC2086
+		make CC=clang $args olddefconfig \
+			|| die "olddefconfig after KSU/KPROBES force failed"
 		ok "CONFIG_KSU=y CONFIG_KPROBES=y (4.19 grant_root)"
 		summary "| KSU kprobes | CONFIG_KSU=y CONFIG_KPROBES=y |"
 	fi
@@ -251,9 +254,30 @@ build_kernel() {
 	# Stock ROM /proc/version compiler clause. ZyC clang 16 would otherwise
 	# leak "clang version 16.0.6" / LLD into linux_proc_banner
 	# (Chunqiu detectKernelBuild / Miscellaneous Check(9)).
+	# Appending at EOF is too late: mkcompile_h writes compile.h earlier.
 	if [ -n "${SPOOF_LINUX_COMPILER:-}" ] && [ -f scripts/mkcompile_h ]; then
 		if ! grep -q 'SPOOF_LINUX_COMPILER' scripts/mkcompile_h; then
-			printf '\n# Override LINUX_COMPILER with the stock ROM banner.\nif [ -n "${SPOOF_LINUX_COMPILER:-}" ]; then\n\tLINUX_COMPILER="${SPOOF_LINUX_COMPILER}"\nfi\n' >> scripts/mkcompile_h
+			python3 - <<'PY'
+from pathlib import Path
+p = Path("scripts/mkcompile_h")
+t = p.read_text(encoding="utf-8", errors="replace")
+inject = (
+    '\nif [ -n "${SPOOF_LINUX_COMPILER:-}" ]; then\n'
+    '\tLINUX_COMPILER="${SPOOF_LINUX_COMPILER}"\n'
+    "fi\n"
+)
+idx = t.rfind("LINUX_COMPILER=")
+if idx >= 0:
+    nl = t.find("\n", idx)
+    if nl < 0:
+        t = t + inject
+    else:
+        t = t[: nl + 1] + inject + t[nl + 1 :]
+else:
+    t = inject + t
+p.write_text(t, encoding="utf-8")
+print("patched mkcompile_h compiler spoof")
+PY
 		fi
 		ok "linux_proc_banner compiler spoofed"
 	fi
@@ -282,9 +306,30 @@ check_output() {
 
 	if [ "${KSU_VARIANT:-none}" != "none" ]; then
 		local cfg="${OUT}/.config"
-		grep -q '^CONFIG_KSU=y' "$cfg" || die "built .config missing CONFIG_KSU=y"
-		grep -q '^CONFIG_KPROBES=y' "$cfg" || die "built .config missing CONFIG_KPROBES=y"
-		ok "built .config still has CONFIG_KSU=y CONFIG_KPROBES=y"
+		grep -q '^CONFIG_KSU=y' "$cfg" || warn "built .config missing CONFIG_KSU=y (hooks must still be in Image)"
+		grep -q '^CONFIG_KPROBES=y' "$cfg" || warn "built .config missing CONFIG_KPROBES=y"
+		python3 - "$image" <<'PY' || die "Image grant_root/IKCONFIG check failed"
+import sys, zlib
+p = sys.argv[1]
+d = open(p, "rb").read()
+need = b"ksu_grant_root_419 reboot"
+if need not in d:
+    sys.exit("Image missing ksu_grant_root_419 reboot — seccomp/reboot hooks were compiled out")
+print("Image has ksu_grant_root_419 reboot hook")
+m = d.find(b"IKCFG_ST")
+if m < 0:
+    sys.exit("Image missing IKCFG_ST")
+raw = d[m + 8 :]
+e = raw.find(b"IKCFG_ED")
+blob = raw[:e] if e > 0 else raw[: 2 * 1024 * 1024]
+cfg = zlib.decompress(blob, 16 + zlib.MAX_WBITS).decode("ascii", "replace")
+for key in ("CONFIG_KSU=y", "CONFIG_KPROBES=y"):
+    if key not in cfg.splitlines():
+        print(f"WARN Image IKCONFIG missing {key}")
+    else:
+        print(f"Image IKCONFIG has {key}")
+PY
+		ok "Image contains grant_root reboot hook"
 	fi
 
 	if is_true "${NEED_DTBO:-false}"; then
