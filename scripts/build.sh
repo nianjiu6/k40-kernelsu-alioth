@@ -313,9 +313,13 @@ import sys, zlib
 p = sys.argv[1]
 d = open(p, "rb").read()
 need = b"ksu_grant_root_419 reboot"
+seccomp = b"ksu_grant_root_419 seccomp"
 if need not in d:
-    sys.exit("Image missing ksu_grant_root_419 reboot — seccomp/reboot hooks were compiled out")
+    sys.exit("Image missing ksu_grant_root_419 reboot — reboot hook compiled out")
+if seccomp not in d:
+    sys.exit("Image missing ksu_grant_root_419 seccomp — Manager ksud will be SIGSYS'd")
 print("Image has ksu_grant_root_419 reboot hook")
+print("Image has ksu_grant_root_419 seccomp hook")
 m = d.find(b"IKCFG_ST")
 if m < 0:
     sys.exit("Image missing IKCFG_ST")

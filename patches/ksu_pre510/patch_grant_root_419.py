@@ -56,7 +56,7 @@ SECCOMP_IFDEF = """\tthis_syscall = sd ? sd->nr :
 \tswitch (mode) {
 """
 
-SECCOMP_ALWAYS = """\tthis_syscall = sd ? sd->nr :
+SECCOMP_ALWAYS_SDARGS = """\tthis_syscall = sd ? sd->nr :
 \t\tsyscall_get_nr(current, task_pt_regs(current));
 
 \t/* KSU_GRANT_ROOT_419_ALWAYS: never gate on CONFIG_KSU. */
@@ -74,6 +74,20 @@ SECCOMP_ALWAYS = """\tthis_syscall = sd ? sd->nr :
 \t\t\ta1 = args[1];
 \t\t}
 \t\tif ((unsigned int)a0 == 0xDEADBEEF && (unsigned int)a1 == 0xCAFEBABE)
+\t\t\treturn 0;
+\t}
+
+\tswitch (mode) {
+"""
+
+SECCOMP_ALWAYS = """\tthis_syscall = sd ? sd->nr :
+\t\tsyscall_get_nr(current, task_pt_regs(current));
+
+\t/* KSU_GRANT_ROOT_419_ALWAYS: magics from pt_regs, never sd->args. */
+\t{
+\t\textern int ksu_seccomp_may_allow_reboot(int nr);
+
+\t\tif (ksu_seccomp_may_allow_reboot(this_syscall))
 \t\t\treturn 0;
 \t}
 
@@ -204,10 +218,10 @@ def main() -> int:
     kernel = Path(sys.argv[1])
     patch_file(
         kernel / "kernel" / "seccomp.c",
-        [SECCOMP_IFDEF, SECCOMP_STOCK],
+        [SECCOMP_ALWAYS_SDARGS, SECCOMP_IFDEF, SECCOMP_STOCK],
         SECCOMP_ALWAYS,
         "seccomp reboot-magic",
-        "KSU_GRANT_ROOT_419_ALWAYS",
+        "ksu_seccomp_may_allow_reboot",
     )
     patch_file(
         kernel / "kernel" / "reboot.c",
@@ -223,6 +237,47 @@ def main() -> int:
         "setresuid hook",
         "KSU_GRANT_ROOT_419_ALWAYS",
     )
+    cache = kernel / "kernelsu" / "infra" / "seccomp_cache.c"
+    if not cache.is_file():
+        cache = kernel / "KernelSU" / "kernel" / "infra" / "seccomp_cache.c"
+    # Built kernel tree uses KERNEL_DIR/kernelsu after kernelsu.sh copy.
+    ksu_cache_candidates = [
+        kernel / "infra" / "seccomp_cache.c",
+        kernel / "kernelsu" / "infra" / "seccomp_cache.c",
+        kernel / "KernelSU" / "kernel" / "infra" / "seccomp_cache.c",
+    ]
+    cache_text_old = """void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
+    return;
+#endif
+"""
+    cache_text_new = """void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 11, 0)
+    ksu_seccomp_mark_reboot_allowed(filter);
+    return;
+#endif
+"""
+    for cand in ksu_cache_candidates:
+        if cand.is_file():
+            text = cand.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+            if "ksu_seccomp_mark_reboot_allowed" in text:
+                print(f"already patched: {cand} (seccomp cache mark)")
+                break
+            if cache_text_old not in text:
+                print(f"skip seccomp cache mark, marker missing: {cand}")
+                break
+            if '#include "hook/kprobe_fallback.h"' not in text:
+                text = text.replace(
+                    '#include "infra/seccomp_cache.h"\n',
+                    '#include "infra/seccomp_cache.h"\n#include "hook/kprobe_fallback.h"\n',
+                    1,
+                )
+            text = text.replace(cache_text_old, cache_text_new, 1)
+            cand.write_text(text, encoding="utf-8", newline="\n")
+            print(f"patched 4.19 grant_root seccomp cache mark: {cand}")
+            break
     return 0
 
 

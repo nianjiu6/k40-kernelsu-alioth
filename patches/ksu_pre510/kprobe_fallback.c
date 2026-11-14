@@ -26,6 +26,48 @@
 #include "runtime/ksud.h"
 #include "uapi/supercall.h"
 
+static void *ksu_reboot_ok_filter;
+
+void ksu_seccomp_mark_reboot_allowed(void *filter)
+{
+    ksu_reboot_ok_filter = filter;
+}
+
+int ksu_seccomp_may_allow_reboot(int nr)
+{
+    struct pt_regs *regs;
+    unsigned long args[2];
+    int real_nr;
+
+    regs = task_pt_regs(current);
+    if (!regs)
+        return 0;
+
+    real_nr = syscall_get_nr(current, regs);
+    if (nr != __NR_reboot && real_nr != __NR_reboot)
+        return 0;
+
+    /*
+     * Never trust seccomp_data.args: Qualcomm 4.19 often passes a
+     * non-NULL sd with nr set and args[0/1] still zero, so Manager's
+     * libksud reboot(DEADBEEF, CAFEBABE) is SIGSYS'd.
+     */
+    syscall_get_arguments(current, regs, 0, 2, args);
+    if ((unsigned int)args[0] == KSU_INSTALL_MAGIC1 &&
+        (unsigned int)args[1] == KSU_INSTALL_MAGIC2) {
+        pr_info("ksu_grant_root_419 seccomp\n");
+        return 1;
+    }
+
+    if (ksu_reboot_ok_filter &&
+        (void *)current->seccomp.filter == ksu_reboot_ok_filter) {
+        pr_info("ksu_grant_root_419 seccomp filter\n");
+        return 1;
+    }
+
+    return 0;
+}
+
 static int seccomp_reboot_pre(struct kprobe *p, struct pt_regs *regs)
 {
     struct pt_regs *real;
